@@ -14,7 +14,7 @@
 
 """User-friendly container for Google Cloud Bigtable Row."""
 
-from google.api_core.exceptions import GoogleAPICallError
+from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
 from google.cloud._helpers import (
     _datetime_from_microseconds,  # type: ignore
     _microseconds_from_datetime,  # type: ignore
@@ -24,6 +24,8 @@ from google.rpc import code_pb2, status_pb2
 
 from google.cloud.bigtable.data import mutations
 from google.cloud.bigtable.data import read_modify_write_rules as rmw_rules
+from google.cloud.bigtable.data._helpers import _get_status
+from google.cloud.bigtable.data.exceptions import RetryExceptionGroup
 
 MAX_MUTATIONS = 100000
 """The maximum number of mutations that a row can accumulate."""
@@ -451,7 +453,9 @@ class DirectRow(_SetDeleteRow):
         in the row are left unchanged unless explicitly changed by a mutation.
 
         After committing the accumulated mutations, resets the local
-        mutations to an empty list.
+        mutations to an empty list. This happens regardless of the outcome, so
+        a failed :meth:`commit` cannot be retried by calling it again on the
+        same row; re-add the mutations to retry them.
 
         For example:
 
@@ -477,6 +481,21 @@ class DirectRow(_SetDeleteRow):
             self._table._table_impl.mutate_row(self.row_key, self._get_mutations())
             return status_pb2.Status(code=code_pb2.OK)
         except GoogleAPICallError as e:
+            # On timeout the data client raises a synthetic DeadlineExceeded
+            # chained with the errors seen on the wire, which would mask the
+            # real failure, so report the terminal one instead. Only that case
+            # is unwrapped: otherwise the raised error already is the terminal
+            # one and the group holds only earlier attempts. The synthetic
+            # error is the one with no response, as server errors carry one.
+            cause = e.__cause__
+            if (
+                isinstance(e, DeadlineExceeded)
+                and e.response is None
+                and isinstance(cause, RetryExceptionGroup)
+                and cause.exceptions
+            ):
+                return _get_status(cause.exceptions[-1])
+
             # If the RPC call returns an error, extract the error into a status object, if possible.
             return status_pb2.Status(
                 code=e.grpc_status_code.value[0]
