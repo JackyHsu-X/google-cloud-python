@@ -53,9 +53,6 @@ async def main(project_id, instance_id, table_id):
     # the async client only supports the data API. Table creation is an admin operation
     # use admin client to create the table
     print("Creating the {} table.".format(table_id))
-    admin_client = bigtable_admin.BigtableTableAdminAsyncClient()
-    instance_path = admin_client.instance_path(project_id, instance_id)
-
     print("Creating column family cf1 with Max Version GC rule...")
     # Create a column family with GC policy : most recent N versions
     # Define the GC policy to retain only the most recent 2 versions
@@ -64,14 +61,16 @@ async def main(project_id, instance_id, table_id):
     column_families = {
         column_family_id: bigtable_admin.ColumnFamily(gc_rule=max_versions_rule)
     }
-    try:
-        await admin_client.create_table(
-            parent=instance_path,
-            table_id=table_id,
-            table=bigtable_admin.Table(column_families=column_families),
-        )
-    except AlreadyExists:
-        print("Table {} already exists.".format(table_id))
+    async with bigtable_admin.BigtableTableAdminAsyncClient() as admin_client:
+        instance_path = admin_client.instance_path(project_id, instance_id)
+        try:
+            await admin_client.create_table(
+                parent=instance_path,
+                table_id=table_id,
+                table=bigtable_admin.Table(column_families=column_families),
+            )
+        except AlreadyExists:
+            print("Table {} already exists.".format(table_id))
     # [END bigtable_async_hw_create_table]
 
     try:
@@ -136,12 +135,11 @@ async def main(project_id, instance_id, table_id):
 
         # the async client only supports the data API. Table deletion is an admin operation
         # use admin client to delete the table
-        admin_client = bigtable_admin.BigtableTableAdminAsyncClient()
-        table_path = admin_client.table_path(project_id, instance_id, table_id)
+        async with bigtable_admin.BigtableTableAdminAsyncClient() as admin_client:
+            table_path = admin_client.table_path(project_id, instance_id, table_id)
 
-        print("Deleting the {} table.".format(table_id))
-        await admin_client.delete_table(name=table_path)
-        await admin_client.close()
+            print("Deleting the {} table.".format(table_id))
+            await admin_client.delete_table(name=table_path)
         await table.close()
         await client.close()
         # [END bigtable_async_hw_delete_table]
